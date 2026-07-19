@@ -21,7 +21,6 @@ export default function CustomerEntry() {
   const [demoOtp, setDemoOtp] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Restore session on mount
   useEffect(() => {
     const s = customerSession.get();
     if (!s) return;
@@ -31,7 +30,6 @@ export default function CustomerEntry() {
     if (s.otpVerified) setOtpVerified(true);
   }, []);
 
-  // Persist session on every field change
   useEffect(() => {
     customerSession.patch({ mobile, policy, tab, otpVerified });
   }, [mobile, policy, tab, otpVerified]);
@@ -85,7 +83,7 @@ export default function CustomerEntry() {
           <div className="mono text-[10px] uppercase tracking-[0.28em]" style={{ color: GOLD }}>Node 01 · Customer Verification</div>
           <h2 className="aesthetic-serif text-5xl leading-[0.98] mt-4">Identity handshake.</h2>
           <p className="mt-5 max-w-sm text-sm leading-relaxed" style={{ color: MUTED }}>
-            Existing customers verify policy. New callers only need a mobile number — we forward you to the customer care center at ravikant.vishl@newindia.co.in.
+            Existing customers verify policy. New callers only need a mobile number — your intake request will be auto-classified and securely routed directly to our secure response cell.
           </p>
 
           <div className="mt-8 inline-flex gap-1 rounded-xl p-1" style={{ background: PANEL, border: `1px solid ${BORDER}` }}>
