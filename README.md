@@ -1,2 +1,1 @@
-# MANJULA_SAMADHAAN
-FOR HACKATHON 2026
+# Here are your Instructions
