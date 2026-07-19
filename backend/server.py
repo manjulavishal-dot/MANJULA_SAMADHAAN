@@ -39,6 +39,7 @@ from models import Policy, Office, OTP, Ticket, Notification, AuditLog
 from llm import translate_text, classify_intent, summarize_concern, generate_subject, draft_office_solution
 from mailer import send_email, OFFICIAL_TEMPLATE, team_for, chief_designation, department_for
 from sms import send_sms
+from verify import send_otp_via_plivo
 
 # ---------- setup ----------
 ROOT_DIR = Path(__file__).parent
@@ -270,6 +271,7 @@ async def send_otp(req: OTPSendReq):
     if len(req.mobile) != 10 or not req.mobile.isdigit():
         raise HTTPException(400, "Mobile must be 10 digits")
     otp = f"{random.randint(100000, 999999)}"
+    send_otp_via_plivo(req.mobile, otp)
     otp_doc = OTP(mobile=req.mobile, otp=otp)
     await db.otps.update_one(
         {"mobile": req.mobile},
@@ -280,7 +282,6 @@ async def send_otp(req: OTPSendReq):
                             message=f"Your Samaadhaan OTP is {otp}. Valid for 5 minutes.")
     await audit(f"customer:{req.mobile}", "otp_sent", "otp", req.mobile)
     return {"status": "sent", "demo_otp": otp}
-
 
 @api.post("/auth/otp/verify")
 async def verify_otp(req: OTPVerifyReq):
