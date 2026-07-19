@@ -117,23 +117,22 @@ def office_scope_query(payload: dict) -> dict:
 async def seed_data():
     if await db.policies.count_documents({}) == 0:
         for p in [
-            Policy(policy_no="67010023456789012001", mobile="9876543210", office_code="670100",
+            Policy(policy_no="67010023456789012001", mobile="9742882272", office_code="670100",
                    customer_name="Ravi Kumar", product="Mediclaim Policy"),
-            Policy(policy_no="67010023456789012002", mobile="9123456780", office_code="670100",
+            Policy(policy_no="67010023456789012002", mobile="9742882272", office_code="670100",
                    customer_name="Priya Sharma", product="Motor Insurance"),
-            Policy(policy_no="94000012345678901001", mobile="9988776655", office_code="940000",
+            Policy(policy_no="94000012345678901001", mobile="9611309600", office_code="940000",
                    customer_name="Anil Deshpande", product="Home Insurance"),
         ]:
             await db.policies.insert_one(p.to_mongo())
 
-    # Unified mailbox format: nia.{code}@newindia.co.in for policy/claims/grievance/general.
+    # Unified mailbox structure mapping specific office codes to custom target emails
     unified_offices = [
-        ("670100", "Mumbai Regional Office"),
-        ("940000", "Delhi Regional Office"),
-        ("admin", "Admin (All Offices)"),
+        ("670100", "Mumbai Regional Office", "julieanderson123j@gmail.com"),
+        ("940000", "Delhi Regional Office", "nagendra.yadav@gmail.com"),
+        ("admin", "Admin (All Offices)", "admin@samaadhaan.internal"),
     ]
-    for code, name in unified_offices:
-        mailbox = f"nia.{code}@newindia.co.in"
+    for code, name, mailbox in unified_offices:
         await db.offices.update_one(
             {"code": code},
             {"$set": {"email": mailbox, "claims_email": mailbox, "grievance_email": mailbox, "name": name},
