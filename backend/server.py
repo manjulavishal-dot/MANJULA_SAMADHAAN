@@ -1,4 +1,5 @@
-"""Samaadhaan API — New India Assurance grievance portal.
+"""
+"Samaadhaan API — New India Assurance grievance portal.
 
 Enhancements over v1:
   - Structured models (BaseDocument, PyObjectId pattern)
@@ -22,7 +23,7 @@ import uuid
 from pathlib import Path
 from typing import List, Optional, Literal, Any
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -267,11 +268,14 @@ async def draft_email(req: AIEmailReq):
 # AUTH — OTP
 # ============================================================
 @api.post("/auth/otp/send")
-async def send_otp(req: OTPSendReq):
+async def send_otp(req: OTPSendReq, background_tasks: BackgroundTasks):
     if len(req.mobile) != 10 or not req.mobile.isdigit():
         raise HTTPException(400, "Mobile must be 10 digits")
     otp = f"{random.randint(100000, 999999)}"
-    send_otp_via_plivo(req.mobile, otp)
+    
+    # Safety: Offload the synchronous, blocking network call to separate worker pool
+    background_tasks.add_task(send_otp_via_plivo, req.mobile, otp)
+    
     otp_doc = OTP(mobile=req.mobile, otp=otp)
     await db.otps.update_one(
         {"mobile": req.mobile},
@@ -484,9 +488,6 @@ async def customer_history(mobile: str):
 
 
 # ---------- Internal INBOX ----------
-# Returns the emails routed to the currently-logged-in office as an inbox.
-# Admin sees every email; office sees only emails to any of their mail addresses
-# (office.email, claims_email, grievance_email).
 @api.get("/inbox")
 async def inbox(payload: dict = Depends(current_office), limit: int = Query(100, le=500)):
     query: dict[str, Any] = {"type": "email"}
@@ -514,7 +515,6 @@ async def mark_read(notif_id: str, payload: dict = Depends(current_office)):
     return {"status": "read"}
 
 
-# NOTE: literal route MUST be declared before "/tickets/{ticket_pk}" to avoid shadowing.
 @api.get("/tickets/export.csv")
 async def export_csv(payload: dict = Depends(current_office)):
     scope = office_scope_query(payload)
@@ -566,7 +566,6 @@ async def resolve_ticket(ticket_pk: str, req: TicketResolveReq, payload: dict = 
             "updated_at": now_iso(),
         }},
     )
-    # SMS is disabled for tickets that were escalated (per user spec).
     if not t.get("escalated"):
         await push_notification(
             type="sms", to=t["mobile"],
@@ -584,11 +583,6 @@ async def resolve_ticket(ticket_pk: str, req: TicketResolveReq, payload: dict = 
 
 @api.post("/tickets/{ticket_pk}/escalate")
 async def escalate_ticket(ticket_pk: str, payload: Optional[dict] = None, _actor: str = "system"):
-    """Escalate manually or from scheduler.
-
-    Auto-sends a contextual, AI-drafted email through Resend directly to
-    manjula.vishal@newindia.co.in (CC: office). No SMS is triggered.
-    """
     t = await db.tickets.find_one({"id": ticket_pk}, {"_id": 0})
     if not t:
         raise HTTPException(404, "Ticket not found")
@@ -608,9 +602,7 @@ async def escalate_ticket(ticket_pk: str, payload: Optional[dict] = None, _actor
          "$inc": {"escalation_count": 1}},
     )
 
-    # Fresh AI classification snapshot at escalation time (priority + sentiment).
     cls = await classify_intent(t.get("parsed_text", "")) if t.get("parsed_text") else {"priority": t.get("priority"), "sentiment": t.get("sentiment"), "service_type": t.get("service_type")}
-    # Persist enriched signals back onto the ticket.
     await db.tickets.update_one(
         {"id": ticket_pk},
         {"$set": {
@@ -661,7 +653,6 @@ async def escalate_ticket(ticket_pk: str, payload: Optional[dict] = None, _actor
         company="New India Assurance",
     )
 
-    # Auto-deliver through Resend, straight to Manjula (no override).
     n = Notification(
         type="email", to=HIGHER_AUTHORITY_EMAIL,
         subject=subject, message=body, ticket_id=t["ticket_id"],
@@ -671,10 +662,6 @@ async def escalate_ticket(ticket_pk: str, payload: Optional[dict] = None, _actor
                               cc=[office_mail] if office_mail else None,
                               bypass_override=True)
 
-    # Sandbox fallback: if Resend rejected because the domain is not verified,
-    # retry via the standard TEST_EMAIL_OVERRIDE pathway so the demo still lands
-    # in the user's inbox. The subject/body already contain the intended
-    # recipient thanks to the override wrapper.
     fallback = False
     if not result.get("sent"):
         err = (result.get("error") or "").lower()
@@ -758,7 +745,6 @@ async def analytics_summary(payload: dict = Depends(current_office)):
         by_priority[t.get("priority", "normal")] = by_priority.get(t.get("priority", "normal"), 0) + 1
         by_office[t.get("office_code", "?")] = by_office.get(t.get("office_code", "?"), 0) + 1
 
-    # Compute avg resolution time (hours)
     resolved = [t for t in tickets if t.get("resolved_at")]
     avg_hours = 0.0
     if resolved:
@@ -768,7 +754,6 @@ async def analytics_summary(payload: dict = Depends(current_office)):
             total_sec += max(dt, 0)
         avg_hours = round((total_sec / len(resolved)) / 3600, 2)
 
-    # Last 7 day trend
     from datetime import timedelta as _td
     from core import now_utc
     days = []
@@ -789,11 +774,6 @@ async def analytics_summary(payload: dict = Depends(current_office)):
 
 
 # ============================================================
-# CSV EXPORT — moved above /tickets/{ticket_pk} to avoid route shadowing
-# ============================================================
-
-
-# ============================================================
 # NOTIFICATIONS + AUDIT
 # ============================================================
 @api.get("/notifications")
@@ -806,7 +786,6 @@ async def list_notifications(payload: dict = Depends(current_office),
     if to:
         query["to"] = to
 
-    # Scope: non-admin sees notifications tied to their tickets
     if payload.get("role") != "admin":
         scoped = await db.tickets.find({"office_code": payload["sub"]}, {"ticket_id": 1, "_id": 0}).to_list(2000)
         ids = [x["ticket_id"] for x in scoped]
@@ -843,11 +822,15 @@ async def classify(req: ClassifyReq):
 
 
 # ============================================================
-# ROOT
+# ROOT — Mounted to app directly to solve the 404 health check error
 # ============================================================
+@app.get("/")
+async def root():
+    return {"service": "Samaadhaan API", "version": "2.0", "status": "ok"}
+
+
 @api.post("/admin/wipe")
 async def wipe_all(payload: dict = Depends(current_office)):
-    """Admin-only: purge tickets, notifications, and audit history. Keeps offices + policies."""
     if payload.get("role") != "admin":
         raise HTTPException(403, "Admin only")
     r1 = await db.tickets.delete_many({})
@@ -864,18 +847,12 @@ async def wipe_all(payload: dict = Depends(current_office)):
     }
 
 
-@api.get("/")
-async def root():
-    return {"service": "Samaadhaan API", "version": "2.0", "status": "ok"}
-
-
 # ============================================================
 # LIFECYCLE
 # ============================================================
 @app.on_event("startup")
 async def on_start():
     await seed_data()
-    # Real 24h auto-escalation — run every 10 minutes
     scheduler.add_job(_run_auto_escalate, "interval", minutes=10, id="auto-escalate", replace_existing=True)
     scheduler.start()
     logger.info("Samaadhaan v2 started · scheduler running · seed complete")
