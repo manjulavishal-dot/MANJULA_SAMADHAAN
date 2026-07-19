@@ -1,5 +1,5 @@
 """
-"Samaadhaan API — New India Assurance grievance portal.
+"Samaadhaan API — Automated grievance portal.
 
 Enhancements over v1:
   - Structured models (BaseDocument, PyObjectId pattern)
@@ -219,7 +219,7 @@ async def draft_email(req: AIEmailReq):
         signer_name = req.signer_name or (off.get("name") if off else "Office")
         signer_designation = req.signer_designation or chief_designation(t["service_type"])
         department = department_for(t["service_type"])
-        company = "New India Assurance"
+        company = "Samaadhaan Suite"
 
     body = OFFICIAL_TEMPLATE.format(
         team=team,
@@ -393,16 +393,14 @@ async def create_ticket(req: TicketCreateReq):
         priority = cls["priority"]
         sentiment = cls["sentiment"]
 
-    # Resolve target email
+    # Resolve target email safely using seeded mailboxes
     off = await db.offices.find_one({"code": office_code}, {"_id": 0})
-    if service_type == "claims":
-        target_email = off["claims_email"] if off else "claims@newindia.co.in"
-    elif service_type == "grievance":
-        target_email = off["grievance_email"] if off else "grievance@newindia.co.in"
+    if off:
+        target_email = off["email"]
     elif req.customer_type == "new":
         target_email = CALL_CENTER_EMAIL
     else:
-        target_email = off["email"] if off else "office@newindia.co.in"
+        target_email = "support@samaadhaan.internal"
 
     ticket_id = build_ticket_id(req.mobile, req.policy_no)
     ticket = Ticket(
@@ -428,7 +426,7 @@ async def create_ticket(req: TicketCreateReq):
         signer_name="Samaadhaan Bot",
         signer_designation="Automated Intake",
         department="Customer Dispatch Cell",
-        company="New India Assurance",
+        company="Samaadhaan Suite",
     )
     await push_notification(
         type="email", to=target_email,
@@ -437,7 +435,7 @@ async def create_ticket(req: TicketCreateReq):
     await push_notification(
         type="sms", to=req.mobile,
         message=(
-            f"Your issue has been escalated. Ticket: {ticket_id}. Someone from New India will call you shortly."
+            f"Your issue has been escalated. Ticket: {ticket_id}. Someone will call you shortly."
             if req.customer_type == "new"
             else f"Issue reported. Ticket: {ticket_id}. Concerned office will respond within 24 hours."
         ),
@@ -649,7 +647,7 @@ async def escalate_ticket(ticket_pk: str, payload: Optional[dict] = None, _actor
         signer_name="Samaadhaan Automated Escalation",
         signer_designation="24h SLA Watchdog",
         department="Grievance Cell",
-        company="New India Assurance",
+        company="Samaadhaan Suite",
     )
 
     n = Notification(
